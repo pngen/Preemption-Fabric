@@ -40,7 +40,8 @@ enum class MessageType : std::uint32_t {
   kCancel = 20,
   kComplete = 21,
   kError = 22,
-  kShutdown = 23
+  kShutdown = 23,
+  kReplayStale = 24
 };
 
 inline constexpr std::string_view to_string(MessageType t) noexcept {
@@ -68,6 +69,7 @@ inline constexpr std::string_view to_string(MessageType t) noexcept {
     case MessageType::kComplete: return "COMPLETE";
     case MessageType::kError: return "ERROR";
     case MessageType::kShutdown: return "SHUTDOWN";
+    case MessageType::kReplayStale: return "REPLAY_STALE";
   }
   return "INVALID";
 }

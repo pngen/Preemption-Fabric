@@ -63,7 +63,7 @@ bool decode_body(std::span<const std::byte> bytes, Message& out) {
   std::uint64_t v;
   if (!read_u32(r, t)) return false;
   if (!read_u32(r, seq)) return false;
-  if (t == 0 || t > static_cast<std::uint32_t>(MessageType::kShutdown)) return false;
+  if (t == 0 || t > static_cast<std::uint32_t>(MessageType::kReplayStale)) return false;
   out.type = static_cast<MessageType>(t);
   out.seq = seq;
 

@@ -9,6 +9,8 @@ set(PF_TESTS
   test_property
   test_concurrency
   test_adversarial
+  test_priority_inversion
+  test_migration
 )
 
 foreach(t IN LISTS PF_TESTS)
@@ -24,3 +26,9 @@ target_link_libraries(test_multiprocess PRIVATE PreemptionFabric::PreemptionFabr
 target_include_directories(test_multiprocess PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
 add_test(NAME test_multiprocess
   COMMAND test_multiprocess $<TARGET_FILE:pf_coordinator> $<TARGET_FILE:pf_worker>)
+
+add_executable(test_kill_after_preservation test_kill_after_preservation.cpp)
+target_link_libraries(test_kill_after_preservation PRIVATE PreemptionFabric::PreemptionFabric)
+target_include_directories(test_kill_after_preservation PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+add_test(NAME test_kill_after_preservation
+  COMMAND test_kill_after_preservation $<TARGET_FILE:pf_coordinator> $<TARGET_FILE:pf_worker>)

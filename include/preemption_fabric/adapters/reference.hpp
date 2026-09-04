@@ -22,7 +22,8 @@ class ReferenceAdapters final
       public IResourceBroker,
       public IDependencyFabric,
       public IFailureFabric,
-      public IQuiescenceProvider {
+      public IQuiescenceProvider,
+      public ICompatibilityEvaluator {
  public:
   // --- Execution Fabric ---
   void set_authoritative(ExecutionId execution, AttemptId attempt, ExecutionGeneration gen,
@@ -198,6 +199,24 @@ class ReferenceAdapters final
   }
   DependencyView resume_dependencies(ExecutionId) override { return resume_dep_; }
 
+  // --- Compatibility evaluator (migration destination) ---
+  void set_capability_context(DeviceCapability current, DeviceCapability required) {
+    current_capability_ = current;
+    required_capability_ = required;
+  }
+  void set_force_incompatible(bool v) { force_incompatible_ = v; }
+  void set_force_stale_capability(bool v) { force_stale_capability_ = v; }
+  DeviceCapability current_capability() const override { return current_capability_; }
+  bool capability_is_compatible(const DeviceCapability& dst) const override {
+    if (force_incompatible_) return false;
+    return dst.memory_bytes >= required_capability_.memory_bytes && dst.supports_state_restore &&
+           dst.compute_compatibility >= required_capability_.compute_compatibility;
+  }
+  bool capability_generation_current(const DeviceCapability& dst) const override {
+    if (force_stale_capability_) return false;
+    return dst.capability_generation == current_capability_.capability_generation;
+  }
+
   // --- Failure Fabric ---
   void report(FailureCategory category, std::string_view detail) override {
     failures_.push_back({category, std::string(detail)});
@@ -265,6 +284,12 @@ class ReferenceAdapters final
   // Dependency
   std::map<DependencyId, DependencyView> dep_status_;
   DependencyView resume_dep_;
+
+  // Compatibility
+  DeviceCapability current_capability_;
+  DeviceCapability required_capability_;
+  bool force_incompatible_ = false;
+  bool force_stale_capability_ = false;
 
   // Failure
   std::vector<std::pair<FailureCategory, std::string>> failures_;

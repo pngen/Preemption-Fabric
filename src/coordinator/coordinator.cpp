@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <string>
 
 #include "preemption_fabric/adapters/reference.hpp"
@@ -45,12 +46,12 @@ int main(int argc, char** argv) {
   std::printf("PORT %u\n", static_cast<unsigned>(listener.port));
   std::fflush(stdout);
 
-  // Accept the worker.
+  // Accept the worker->
   SOCKET ws = accept_connection(listener.sock);
   if (ws == static_cast<SOCKET>(-1)) return 1;
-  TcpConnection worker(ws);
+  std::unique_ptr<TcpConnection> worker(new TcpConnection(ws));
   Message hello, reg;
-  if (!worker.receive(hello) || !worker.receive(reg) || reg.type != MessageType::kRegister) {
+  if (!worker->receive(hello) || !worker->receive(reg) || reg.type != MessageType::kRegister) {
     std::fprintf(stderr, "coordinator: bad worker registration\n");
     return 1;
   }
@@ -63,7 +64,7 @@ int main(int argc, char** argv) {
   reg_ack.worker_id = worker_id;
   reg_ack.worker_boot_id = boot;
   reg_ack.coordinator_epoch = CoordinatorEpoch(100);
-  worker.send(reg_ack);
+  worker->send(reg_ack);
   std::printf("REGISTERED worker=%llu boot=%llu\n", (unsigned long long)worker_id.value(), (unsigned long long)boot.value());
   std::fflush(stdout);
 
@@ -79,9 +80,10 @@ int main(int argc, char** argv) {
   SafePointId safe_point(80);
   bool started = false;
   std::uint64_t last_progress = 0;
+  std::uint64_t boot_counter = 0;
 
   auto run_segment = [&](std::uint64_t target) -> bool {
-    if (!worker.is_open()) return false;
+    if (!worker->is_open()) return false;
     Message cmd;
     cmd.type = MessageType::kPublishProgress;
     cmd.worker_id = worker_id;
@@ -94,10 +96,10 @@ int main(int argc, char** argv) {
     cmd.safe_point_id = safe_point;
     cmd.progress_position = target;
     cmd.safe_point_capture_required = true;
-    if (!worker.send(cmd)) { std::printf("WORKER_LOST\n"); std::fflush(stdout); return false; }
+    if (!worker->send(cmd)) { std::printf("WORKER_LOST\n"); std::fflush(stdout); return false; }
     Message prog, reach;
-    if (!worker.receive(prog)) { std::printf("WORKER_LOST\n"); std::fflush(stdout); return false; }
-    if (!worker.receive(reach)) { std::printf("WORKER_LOST\n"); std::fflush(stdout); return false; }
+    if (!worker->receive(prog)) { std::printf("WORKER_LOST\n"); std::fflush(stdout); return false; }
+    if (!worker->receive(reach)) { std::printf("WORKER_LOST\n"); std::fflush(stdout); return false; }
     rt.reach_safe_point(safe_point, reach.safe_point_position, false);
     rt.publish_progress(prog.progress_position, prog.progress_kind);
     last_progress = prog.progress_position;
@@ -105,7 +107,7 @@ int main(int argc, char** argv) {
   };
 
   auto drive_preemption = [&]() -> bool {
-    if (!worker.is_open()) return false;
+    if (!worker->is_open()) return false;
     // Admit a fresh, valid preemption request.
     PreemptionRequest req;
     req.id = PreemptionRequestId(1000);
@@ -126,9 +128,9 @@ int main(int argc, char** argv) {
     q.type = MessageType::kQuiesced;
     q.worker_id = worker_id; q.worker_boot_id = boot; q.execution_id = exec_id; q.execution_generation = exec_gen;
     q.attempt_id = attempt_id; q.attempt_generation = attempt_gen; q.coordinator_epoch = CoordinatorEpoch(100);
-    if (!worker.send(q)) { std::printf("WORKER_LOST\n"); std::fflush(stdout); return false; }
+    if (!worker->send(q)) { std::printf("WORKER_LOST\n"); std::fflush(stdout); return false; }
     Message qack;
-    if (!worker.receive(qack)) { std::printf("WORKER_LOST\n"); std::fflush(stdout); return false; }
+    if (!worker->receive(qack)) { std::printf("WORKER_LOST\n"); std::fflush(stdout); return false; }
     QuiescenceReport report;
     report.generation = QuiescenceGeneration(1);
     report.worker_id = worker_id; report.worker_boot_id = boot; report.fully_quiesced = true;
@@ -186,7 +188,7 @@ int main(int argc, char** argv) {
       b.execution_id = exec_id; b.execution_generation = exec_gen; b.attempt_id = attempt_id;
       b.attempt_generation = attempt_gen; b.coordinator_epoch = CoordinatorEpoch(100); b.safe_point_id = safe_point;
       b.worker_boot_id = boot;
-      worker.send(b);
+      worker->send(b);
       std::printf("EXECUTION_STARTED\n");
       std::fflush(stdout);
     } else if (cmd.type == MessageType::kPublishProgress) {
@@ -199,10 +201,51 @@ int main(int argc, char** argv) {
       bool ok = drive_resume();
       std::printf("DRIVE_RESUME %d\n", ok ? 1 : 0);
       std::fflush(stdout);
+    } else if (cmd.type == MessageType::kRegister) {
+      SOCKET ns = accept_connection(listener.sock);
+      if (ns == static_cast<SOCKET>(-1)) { std::printf("RE_REGISTER_FAILED\n"); std::fflush(stdout); continue; }
+      auto nw = std::make_unique<TcpConnection>(ns);
+      Message nh, nr;
+      if (!nw->receive(nh) || !nw->receive(nr) || nr.type != MessageType::kRegister) {
+        std::printf("RE_REGISTER_BAD\n"); std::fflush(stdout); continue;
+      }
+      worker_id = nr.worker_id;
+      boot = WorkerBootId(8000 + (++boot_counter));
+      rt.set_worker_incarnation(worker_id, boot);
+      Message ack;
+      ack.type = MessageType::kRegister;
+      ack.worker_id = worker_id;
+      ack.worker_boot_id = boot;
+      ack.coordinator_epoch = CoordinatorEpoch(100);
+      nw->send(ack);
+      worker = std::move(nw);
+      std::printf("RE_REGISTERED worker=%llu boot=%llu\n", (unsigned long long)worker_id.value(),
+                  (unsigned long long)boot.value());
+      std::fflush(stdout);
+    } else if (cmd.type == MessageType::kReplayStale) {
+      PreemptionRequest stale;
+      stale.id = PreemptionRequestId(3000);
+      stale.generation = cmd.request_generation;
+      stale.workload_id = WorkloadId(10);
+      stale.workload_generation = WorkloadGeneration(1);
+      stale.execution_id = exec_id;
+      stale.execution_generation = exec_gen;
+      stale.attempt_id = attempt_id;
+      stale.attempt_generation = cmd.attempt_generation;
+      stale.coordinator_epoch = cmd.coordinator_epoch;
+      stale.worker_id = cmd.worker_id;
+      stale.worker_boot_id = cmd.worker_boot_id;
+      stale.policy_generation = PolicyGeneration(1);
+      stale.authority_generation = AuthorityGeneration(1);
+      auto s = rt.request_preemption(stale);
+      std::printf("STALE_PREEMPTION %d\n", (int)s.code);
+      auto rel = rt.request_release();
+      std::printf("STALE_RELEASE %d\n", (int)(rel.outcome != PreemptionOutcome::kSafePreemptionCompleted));
+      std::fflush(stdout);
     }
   }
 
-  worker.close();
+  worker->close();
   controller.close();
 #ifdef _WIN32
   ::closesocket(listener.sock);

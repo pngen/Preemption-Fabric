@@ -15,6 +15,15 @@ namespace {
 [[nodiscard]] bool known_preemptibility(PreemptibilityClass c) {
   return c != PreemptibilityClass::kInvalid && c != PreemptibilityClass::kUnknown;
 }
+[[nodiscard]] bool is_concretely_preemptible(PreemptibilityClass c) {
+  return c == PreemptibilityClass::kPreemptibleNow || c == PreemptibilityClass::kPreemptibleAtSafePoint ||
+         c == PreemptibilityClass::kPreemptibleAfterStateCapture ||
+         c == PreemptibilityClass::kPreemptibleAfterCommitBoundary ||
+         c == PreemptibilityClass::kRecomputableFromDurableProgress;
+}
+[[nodiscard]] bool is_unknown_preemptibility(PreemptibilityClass c) {
+  return c == PreemptibilityClass::kUnknown || c == PreemptibilityClass::kInvalid;
+}
 
 }  // namespace
 
@@ -582,6 +591,101 @@ std::vector<ExplainEntry> PreemptionRuntime::explain_state() const {
   out.push_back({"state_durable", state_durable_ ? "true" : "false", EvidenceKind::kDerived});
   out.push_back({"resources_released", resources_released_ ? "true" : "false", EvidenceKind::kDerived});
   return out;
+}
+
+PriorityInversionEvidence PreemptionRuntime::priority_inversion_assessment(
+    const PriorityInversionInput& input) const {
+  std::shared_lock lock(mutex_);
+  PriorityInversionEvidence ev;
+  ev.resource = input.resource;
+  ev.holder_workload = input.holder_workload;
+  ev.blocked_workload = input.blocked_workload;
+  ev.reason = input.reason;
+  ev.provenance = input.provenance;
+
+  if (input.resource == ResourceClass::kInvalid || !input.holder_workload.is_valid() ||
+      !input.blocked_workload.is_valid()) {
+    return ev;  // invalid -> ok=false, resolution Unknown
+  }
+  // A stale policy generation is rejected (invalid, not merely stale).
+  if (input.policy_generation != policy_generation_) {
+    ev.stale = false;
+    return ev;
+  }
+  // A stale priority generation is rejected deterministically.
+  if (!input.priority_generation.is_valid() || input.priority_generation != priority_generation_) {
+    ev.stale = true;
+    return ev;
+  }
+
+  ev.ok = true;
+  ev.next_safe_point_cost = input.next_safe_point_cost;
+  ev.preservation_cost = input.preservation_cost;
+  ev.release_cost = input.release_cost;
+  ev.resume_recompute_cost = input.resume_recompute_cost;
+  ev.blocking_duration_ns = input.blocking_duration_ns;
+  ev.blocking_duration_measured = input.blocking_duration_measured;
+
+  ev.holder_preemptible = is_concretely_preemptible(input.holder_preemptibility);
+  if (!input.holder_authoritative) {
+    ev.resolution = PriorityInversionResolution::kSafePreemptionDoesNotResolve;
+  } else if (is_unknown_preemptibility(input.holder_preemptibility)) {
+    // UNKNOWN never becomes a positive recommendation.
+    ev.resolution = PriorityInversionResolution::kUnknown;
+  } else if (ev.holder_preemptible) {
+    ev.resolution = PriorityInversionResolution::kSafePreemptionResolves;
+  } else {
+    ev.resolution = PriorityInversionResolution::kSafePreemptionDoesNotResolve;
+  }
+  return ev;
+}
+
+adapter::MigrationCompatibility PreemptionRuntime::evaluate_migration_destination(
+    const adapter::DeviceCapability& dst) const {
+  std::shared_lock lock(mutex_);
+  adapter::MigrationCompatibility r;
+  if (!machine_.is_preempted_durable() || !state_durable_) {
+    r.outcome = adapter::MigrationCompatibilityOutcome::kStateNotDurable;
+    r.detail = "execution is not in a durable PREEMPTED state";
+    r.reasons.push_back("state not durable");
+    return r;
+  }
+  if (!checkpoint_ref_.is_valid() || !checkpoint_generation_.is_valid()) {
+    r.outcome = adapter::MigrationCompatibilityOutcome::kIncompatibleCapability;
+    r.detail = "preserved state is not bound to a valid checkpoint generation";
+    r.reasons.push_back("no checkpoint generation");
+    return r;
+  }
+  if (!adapters_.capability_generation_current(dst)) {
+    r.outcome = adapter::MigrationCompatibilityOutcome::kStaleCapabilityGeneration;
+    r.detail = "destination capability generation is stale";
+    r.reasons.push_back("stale capability generation");
+    return r;
+  }
+  if (!adapters_.capability_is_compatible(dst)) {
+    r.outcome = adapter::MigrationCompatibilityOutcome::kIncompatibleCapability;
+    r.detail = "destination capability is incompatible with the preserved state";
+    r.reasons.push_back("incompatible destination");
+    return r;
+  }
+  auto dep = adapters_.resume_dependencies(execution_id_);
+  if (dep.status == adapter::DependencyStatus::kStale || dep.status == adapter::DependencyStatus::kMissing) {
+    r.outcome = adapter::MigrationCompatibilityOutcome::kBlockedDependency;
+    r.detail = "resume dependency is stale or missing";
+    r.reasons.push_back("stale dependency");
+    return r;
+  }
+  auto contract = adapters_.current_contract(execution_id_);
+  if (!contract.generation.is_valid()) {
+    r.outcome = adapter::MigrationCompatibilityOutcome::kBlockedResource;
+    r.detail = "resource contract generation is not current";
+    r.reasons.push_back("stale resource contract");
+    return r;
+  }
+  r.outcome = adapter::MigrationCompatibilityOutcome::kCompatible;
+  r.detail = "destination is compatible with the preserved state and current generations";
+  r.reasons.push_back("compatible");
+  return r;
 }
 
 void PreemptionRuntime::set_worker_incarnation(WorkerId worker, WorkerBootId boot) {

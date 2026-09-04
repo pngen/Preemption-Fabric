@@ -21,6 +21,7 @@
 #include "preemption_fabric/domains/safepoint.hpp"
 #include "preemption_fabric/lifecycle/lifecycle.hpp"
 #include "preemption_fabric/persistence/state.hpp"
+#include "preemption_fabric/priority/inversion.hpp"
 
 namespace pf {
 
@@ -100,15 +101,25 @@ class PreemptionRuntime {
   PreemptionResult report_released();
   PreemptionResult commit_preempted();
 
-  // ---- Resume ----
+  // ---- Resume / migration compatibility ----
   ResumeEligibility request_resume();
   PreemptionResult revalidate();
   PreemptionResult restore();
   PreemptionResult confirm_resumed();
 
+  // Evaluate an externally supplied migration destination against the preserved
+  // state. This never decides placement; it only reports compatibility evidence.
+  [[nodiscard]] adapter::MigrationCompatibility evaluate_migration_destination(
+      const adapter::DeviceCapability& destination) const;
+
   // ---- Cancellation / completion ----
   void cancel();
   void complete();
+
+  // ---- Priority-inversion evidence (never schedules; policy input only) ----
+  void set_priority_generation(PriorityGeneration g) { priority_generation_ = g; }
+  [[nodiscard]] PriorityGeneration current_priority_generation() const { return priority_generation_; }
+  [[nodiscard]] PriorityInversionEvidence priority_inversion_assessment(const PriorityInversionInput& input) const;
 
   // ---- Explainability ----
   std::vector<ExplainEntry> explain_why_not_preemptible() const;
@@ -196,6 +207,8 @@ class PreemptionRuntime {
   bool resumed_ = false;
 
   std::vector<persist::PersistentSuperseded> history_;
+
+  PriorityGeneration priority_generation_;
 
   adapter::ReferenceAdapters& adapters_;
 

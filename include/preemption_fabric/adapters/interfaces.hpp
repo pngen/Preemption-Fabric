@@ -197,6 +197,54 @@ class IFailureFabric {
 };
 
 // ---------------------------------------------------------------------------
+// Destination / compatibility evaluator (owner of placement capability facts).
+//
+// Preemption Fabric does NOT place work. This narrow interface answers only
+// whether a *supplied* destination is compatible with the preserved state and
+// whether its capability description is current. The owning scheduler decides
+// placement; the runtime only exposes deterministic compatibility evidence.
+// ---------------------------------------------------------------------------
+struct DeviceCapability {
+  std::string device_id;
+  std::uint64_t capability_generation = 0;
+  std::uint64_t memory_bytes = 0;
+  std::uint32_t compute_compatibility = 0;  // e.g. 120 for sm_120
+  bool supports_state_restore = false;
+  bool supports_recompute = false;
+};
+
+enum class MigrationCompatibilityOutcome : std::uint32_t {
+  kInvalid = 0,
+  kCompatible = 1,
+  kIncompatibleCapability = 2,
+  kStaleCapabilityGeneration = 3,
+  kBlockedDependency = 4,
+  kBlockedResource = 5,
+  kStateNotDurable = 6,
+  kUnknown = 7
+};
+
+struct MigrationCompatibility {
+  MigrationCompatibilityOutcome outcome = MigrationCompatibilityOutcome::kUnknown;
+  std::string detail;
+  std::vector<std::string> reasons;
+};
+
+class ICompatibilityEvaluator {
+ public:
+  virtual ~ICompatibilityEvaluator() = default;
+
+  // The authoritative current destination capability.
+  [[nodiscard]] virtual DeviceCapability current_capability() const = 0;
+
+  // Is the supplied destination compatible with the required state profile?
+  [[nodiscard]] virtual bool capability_is_compatible(const DeviceCapability& dst) const = 0;
+
+  // Is the supplied destination's capability generation current?
+  [[nodiscard]] virtual bool capability_generation_current(const DeviceCapability& dst) const = 0;
+};
+
+// ---------------------------------------------------------------------------
 // Quiescence provider (narrow: ask an owning runtime whether it is quiesced)
 // ---------------------------------------------------------------------------
 class IQuiescenceProvider {

@@ -30,6 +30,7 @@
 #include "preemption_fabric/domains/quiescence.hpp"
 
 #include "preemption_fabric/lifecycle/lifecycle.hpp"
+#include "preemption_fabric/priority/inversion.hpp"
 
 #include "preemption_fabric/util/binary.hpp"
 #include "preemption_fabric/util/checked.hpp"
