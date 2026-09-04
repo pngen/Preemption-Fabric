@@ -1,0 +1,14 @@
+#pragma once
+
+// Preemption Fabric version identifiers.
+#define PF_VERSION_MAJOR 1
+#define PF_VERSION_MINOR 0
+#define PF_VERSION_PATCH 0
+
+#define PF_STRINGIFY_IMPL(x) #x
+#define PF_STRINGIFY(x) PF_STRINGIFY_IMPL(x)
+
+#define PF_VERSION_STRING   PF_STRINGIFY(PF_VERSION_MAJOR) "."   PF_STRINGIFY(PF_VERSION_MINOR) "."   PF_STRINGIFY(PF_VERSION_PATCH)
+
+#define PF_PROTOCOL_VERSION 1u
+#define PF_PERSISTENCE_VERSION 1u

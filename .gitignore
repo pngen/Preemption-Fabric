@@ -1,0 +1,41 @@
+# Build outputs
+build/
+build-*/
+cmake-build-*/
+out/
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dylib
+*.exe
+*.pdb
+*.ilk
+*.exp
+
+# Test / proof artifacts
+Testing/
+*.log
+test_runtime/
+pf_runtime/
+
+# Sanitizer debris
+*.asan
+*.dmp
+core.*
+
+# Editor / IDE
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+CMakeSettings.json
+
+# Downstream consumer build
+downstream_consumer/build/
+downstream_consumer/build-*/
+
+# Temp
+tmp/
